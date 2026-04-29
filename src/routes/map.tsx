@@ -99,8 +99,9 @@ function MapPage() {
     lng: r.longitude,
     urgency: r.urgency,
     title: `${r.need_type.toUpperCase()} · ${r.people_affected} people`,
-    subtitle: `${r.urgency} · score ${r.ai_score}`,
+    subtitle: `${r.urgency} · score ${r.ai_score} · ${r.status}`,
     body: r.description.slice(0, 140),
+    imageUrl: r.photo_url,
   }));
 
   const stats = {
@@ -162,6 +163,23 @@ function MapPage() {
         <div className="grid lg:grid-cols-[1fr_380px] gap-4 h-[calc(100vh-240px)] min-h-[600px]">
           <div className="glass-strong rounded-2xl p-3 relative">
             <DisasterMap markers={markers} onSelect={setSelected} height="100%" />
+            <div className="pointer-events-none absolute inset-3 rounded-2xl overflow-hidden">
+              {filtered
+                .filter((r) => r.urgency === "critical" || r.urgency === "high")
+                .slice(0, 14)
+                .map((r, i) => (
+                  <div
+                    key={`heat-${r.id}`}
+                    className={`absolute rounded-full blur-2xl ${r.urgency === "critical" ? "bg-critical/30" : "bg-warning/20"}`}
+                    style={{
+                      width: r.urgency === "critical" ? 110 : 86,
+                      height: r.urgency === "critical" ? 110 : 86,
+                      left: `${15 + ((i * 13) % 70)}%`,
+                      top: `${18 + ((i * 9) % 62)}%`,
+                    }}
+                  />
+                ))}
+            </div>
           </div>
 
           <div className="glass-strong rounded-2xl p-4 overflow-y-auto">
@@ -203,6 +221,9 @@ function RequestList({ requests, onSelect }: { requests: Req[]; onSelect: (id: s
           </div>
           <div className="font-semibold text-sm capitalize">{r.need_type} · {r.disaster_type}</div>
           <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{r.description}</div>
+          {r.photo_url && (
+            <img src={r.photo_url} alt="incident" className="mt-2 h-20 w-full rounded-lg object-cover border border-border/60" />
+          )}
           <div className="flex items-center gap-3 mt-2 text-[11px] text-muted-foreground">
             <span className="flex items-center gap-1"><Users className="h-3 w-3" />{r.people_affected}</span>
             <span className="capitalize px-1.5 py-0.5 rounded bg-muted text-[10px]">{r.status}</span>
@@ -228,6 +249,12 @@ function RequestDetail({ req, onBack }: { req: Req; onBack: () => void }) {
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Description</div>
           <p>{req.description}</p>
         </div>
+        {req.photo_url && (
+          <div className="glass rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Image Evidence</div>
+            <img src={req.photo_url} alt="Uploaded incident evidence" className="h-40 w-full rounded-lg object-cover border border-border/60" />
+          </div>
+        )}
         <div className="glass rounded-lg p-3">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Reporter</div>
           <div className="font-medium">{req.reporter_name}</div>

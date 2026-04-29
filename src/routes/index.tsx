@@ -141,6 +141,12 @@ function Landing() {
 
       {/* HERO */}
       <section className="relative overflow-hidden">
+        <div
+          className="absolute inset-0 bg-cover bg-center opacity-30"
+          style={{ backgroundImage: "url('/landing-storm.png')" }}
+          aria-hidden="true"
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-background/40 via-background/55 to-background/85" aria-hidden="true" />
         <div className="absolute inset-0 gradient-mesh animate-mesh-drift" />
         <motion.div
           className="absolute top-20 right-[12%] h-16 w-16 rounded-2xl glass flex items-center justify-center"
@@ -204,20 +210,6 @@ function Landing() {
                 </Button>
               </Link>
             </div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="mt-8 mx-auto max-w-md glass-strong rounded-2xl p-4 card-3d"
-            >
-              <div className="text-[10px] uppercase tracking-widest text-muted-foreground">Live Response Layer</div>
-              <div className="mt-2 flex items-center justify-between">
-                <span className="text-sm">Regional map sync</span>
-                <span className="text-xs px-2 py-1 rounded-full bg-success/20 text-success">Active</span>
-              </div>
-              <div className="mt-3 h-20 rounded-xl bg-[radial-gradient(circle_at_20%_20%,oklch(0.75_0.15_200_/_0.24),transparent_40%),radial-gradient(circle_at_75%_70%,oklch(0.7_0.22_25_/_0.28),transparent_45%)] border border-border/60" />
-            </motion.div>
 
             {/* Live stats from DB */}
             <div className="mt-16 grid grid-cols-3 gap-4 max-w-2xl mx-auto">

@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Navbar } from "@/components/Navbar";
 import { SosButton } from "@/components/SosButton";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { UrgencyBadge } from "@/components/UrgencyBadge";
 import { VoiceSOS } from "@/components/VoiceSOS";
 import { PhotoUploadField } from "@/components/PhotoUploadField";
 import { scoreRequest, findDuplicates, type NeedType } from "@/lib/ai-scoring";
+import { runTriageAgent, type TriageOutput } from "@/lib/triage-agent";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
@@ -48,6 +49,7 @@ function SubmitPage() {
   const [submitting, setSubmitting] = useState(false);
   const [duplicates, setDuplicates] = useState<{ id: string; description: string }[]>([]);
   const [confirmDup, setConfirmDup] = useState(false);
+  const [triagePreview, setTriagePreview] = useState<TriageOutput | null>(null);
 
   useEffect(() => {
     if (profile) {
@@ -56,10 +58,27 @@ function SubmitPage() {
     }
   }, [profile]); // eslint-disable-line
 
-  const aiResult = useMemo(
-    () => scoreRequest({ needType, peopleAffected: people, description, createdAt: new Date() }),
-    [needType, people, description]
-  );
+  useEffect(() => {
+    let mounted = true;
+    if (!coords) return;
+    runTriageAgent({
+      imageUrl: photoUrl || undefined,
+      description,
+      latitude: coords[0],
+      longitude: coords[1],
+      peopleAffected: people,
+      needType,
+      duplicateCount: duplicates.length,
+      timestamp: new Date(),
+    }).then((result) => {
+      if (mounted) setTriagePreview(result);
+    }).catch(() => {
+      if (mounted) setTriagePreview(null);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [coords, photoUrl, description, people, needType, duplicates.length]);
 
   const detectGps = () => {
     if (!navigator.geolocation) {
@@ -113,8 +132,8 @@ function SubmitPage() {
       setStep(0);
       return;
     }
-    if (!name || !phone || !description) {
-      toast.error("Fill name, phone and description");
+    if (!name || !phone || (!description.trim() && !photoUrl)) {
+      toast.error("Add name, phone, and either a description, image, or voice note.");
       return;
     }
 
@@ -127,6 +146,18 @@ function SubmitPage() {
       }
     }
 
+    const triage = await runTriageAgent({
+      imageUrl: photoUrl || undefined,
+      description,
+      latitude: coords[0],
+      longitude: coords[1],
+      peopleAffected: people,
+      needType,
+      duplicateCount: duplicates.length,
+      timestamp: new Date(),
+    });
+    const fallback = scoreRequest({ needType, peopleAffected: people, description, createdAt: new Date() });
+
     setSubmitting(true);
     const { error } = await supabase.from("emergency_requests").insert({
       reporter_id: user.id,
@@ -135,24 +166,28 @@ function SubmitPage() {
       disaster_type: disasterType,
       need_type: needType,
       people_affected: people,
-      description: description.slice(0, 1000),
+      description: description.slice(0, 1000) || "Image/voice-only request submitted",
       latitude: coords[0],
       longitude: coords[1],
       photo_url: photoUrl || null,
-      urgency: aiResult.urgency,
-      ai_score: aiResult.score,
+      urgency: triage.priorityLabel || fallback.urgency,
+      ai_score: triage.criticalityScore || fallback.score,
     });
     setSubmitting(false);
     if (error) {
       toast.error(error.message);
       return;
     }
-    toast.success("Emergency reported. Volunteers notified.", { duration: 5000 });
+    toast.success(
+      `Request received. TRIAGE AGENT assigned score ${triage.criticalityScore} (${triage.priorityLabel.toUpperCase()}). Nearest NGO resources are being coordinated.`,
+      { duration: 7000 }
+    );
     navigate({ to: "/map" });
   };
 
   const canProceedStep0 = !!coords;
-  const canProceedStep1 = !!name && !!phone && !!description;
+  const canProceedStep1 = !!name && !!phone && (!!description.trim() || !!photoUrl);
+  const fallbackPreview = scoreRequest({ needType, peopleAffected: people, description, createdAt: new Date() });
 
   return (
     <div className="min-h-screen">
@@ -307,7 +342,7 @@ function SubmitPage() {
                     maxLength={1000}
                   />
                   <p className={`text-[10px] mt-1 transition-colors ${description.length > 800 ? "text-warning" : "text-muted-foreground"}`}>
-                    {description.length}/1000 — words like "trapped", "child", "bleeding" raise priority
+                    {description.length}/1000 — text, image, or voice all work. You do not need both.
                   </p>
                 </div>
 
@@ -349,7 +384,7 @@ function SubmitPage() {
                   </div>
                   <div className="glass rounded-lg p-3 text-sm">
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Description</div>
-                    <p className="line-clamp-3">{description}</p>
+                    <p className="line-clamp-3">{description || "No text description provided (image/voice-based request)."}</p>
                   </div>
                   <Button onClick={() => setStep(1)} variant="outline" size="sm">Edit details</Button>
                 </div>
@@ -359,12 +394,17 @@ function SubmitPage() {
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <Sparkles className="h-4 w-4 text-accent" />
-                      <span className="text-xs font-bold tracking-widest uppercase text-accent">AI Priority Score</span>
+                      <span className="text-xs font-bold tracking-widest uppercase text-accent">TRIAGE AGENT</span>
                     </div>
-                    <UrgencyBadge urgency={aiResult.urgency} score={aiResult.score} />
+                    <UrgencyBadge
+                      urgency={triagePreview?.priorityLabel || fallbackPreview.urgency}
+                      score={triagePreview?.criticalityScore || fallbackPreview.score}
+                    />
                   </div>
                   <div className="text-xs text-muted-foreground space-y-0.5">
-                    {aiResult.reasons.map((r, i) => <div key={i}>· {r}</div>)}
+                    {(triagePreview?.reasoning || fallbackPreview.reasons).map((r, i) => <div key={i}>· {r}</div>)}
+                    {triagePreview?.recommendedResourceType && <div>· Recommended resource: {triagePreview.recommendedResourceType}</div>}
+                    {triagePreview?.etaUrgencyLevel && <div>· ETA urgency: {triagePreview.etaUrgencyLevel}</div>}
                   </div>
                 </div>
 

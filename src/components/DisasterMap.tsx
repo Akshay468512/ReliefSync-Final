@@ -11,6 +11,7 @@ export interface MapMarker {
   title: string;
   subtitle?: string;
   body?: string;
+  imageUrl?: string | null;
 }
 
 interface Props {
@@ -100,6 +101,7 @@ export function DisasterMap({
         <div style="min-width:200px;padding:4px;">
           <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${m.title}</div>
           ${m.subtitle ? `<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:${URGENCY_COLORS[m.urgency]};font-weight:600;margin-bottom:6px;">${m.subtitle}</div>` : ""}
+          ${m.imageUrl ? `<img src="${m.imageUrl}" alt="incident" style="width:100%;height:90px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,0.15);margin-bottom:6px;" />` : ""}
           ${m.body ? `<div style="font-size:12px;color:#aaa;line-height:1.4;">${m.body}</div>` : ""}
         </div>`;
       marker.bindPopup(popup);

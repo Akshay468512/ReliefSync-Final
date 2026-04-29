@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import type { Urgency } from "@/lib/ai-scoring";
 import { useCountUp } from "@/lib/use-count-up";
+import { toast } from "sonner";
 import {
   Activity, AlertTriangle, CheckCircle2, Users, Truck, FileWarning,
   Trophy, ShieldAlert, BarChart3, Lock,
@@ -63,6 +64,26 @@ const NEED_COLORS = [
   "oklch(0.68 0.2 240)",
 ];
 
+const RESOURCE_KEYS = ["food", "water", "medicine", "ambulances", "boats", "volunteers", "shelterBeds"] as const;
+type ResourceKey = typeof RESOURCE_KEYS[number];
+type ZoneResource = Record<ResourceKey, number>;
+
+const ZONES = [
+  { name: "KR Puram", lat: 13.0003, lng: 77.6954 },
+  { name: "Whitefield", lat: 12.9698, lng: 77.7499 },
+  { name: "Hebbal", lat: 13.0352, lng: 77.597 },
+  { name: "Electronic City", lat: 12.8456, lng: 77.6603 },
+  { name: "Marathahalli", lat: 12.9591, lng: 77.6974 },
+] as const;
+
+const BASE_SUPPLY: Record<string, ZoneResource> = {
+  "KR Puram": { food: 520, water: 890, medicine: 330, ambulances: 6, boats: 5, volunteers: 85, shelterBeds: 160 },
+  Whitefield: { food: 740, water: 1050, medicine: 420, ambulances: 7, boats: 2, volunteers: 130, shelterBeds: 190 },
+  Hebbal: { food: 690, water: 980, medicine: 380, ambulances: 5, boats: 1, volunteers: 110, shelterBeds: 240 },
+  "Electronic City": { food: 600, water: 880, medicine: 350, ambulances: 8, boats: 1, volunteers: 98, shelterBeds: 180 },
+  Marathahalli: { food: 570, water: 870, medicine: 300, ambulances: 5, boats: 2, volunteers: 92, shelterBeds: 150 },
+};
+
 function AccessDenied() {
   const navigate = useNavigate();
   return (
@@ -92,6 +113,7 @@ function AdminPage() {
   const [missions, setMissions] = useState<Mission[]>([]);
   const [volunteerCount, setVolunteerCount] = useState(0);
   const [dataLoading, setDataLoading] = useState(true);
+  const [seedingDemo, setSeedingDemo] = useState(false);
 
   const load = async () => {
     const [{ data: r }, { data: m }, { data: v }] = await Promise.all([
@@ -196,6 +218,130 @@ function AdminPage() {
     ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 25);
   }, [reqs, missions]);
 
+  const assignZone = (lat: number, lng: number) => {
+    let best: string = ZONES[0].name;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const zone of ZONES) {
+      const d = Math.hypot(lat - zone.lat, lng - zone.lng);
+      if (d < bestDist) {
+        bestDist = d;
+        best = zone.name;
+      }
+    }
+    return best;
+  };
+
+  const zoneInsights = useMemo(() => {
+    const demandByZone: Record<string, ZoneResource> = {};
+    for (const zone of ZONES) {
+      demandByZone[zone.name] = { food: 0, water: 0, medicine: 0, ambulances: 0, boats: 0, volunteers: 0, shelterBeds: 0 };
+    }
+    for (const r of reqs.filter((x) => x.status !== "completed" && x.status !== "cancelled")) {
+      const zone = assignZone(r.latitude, r.longitude);
+      const d = demandByZone[zone];
+      const severityMult = r.urgency === "critical" ? 1.6 : r.urgency === "high" ? 1.25 : r.urgency === "medium" ? 1 : 0.75;
+      d.volunteers += Math.ceil((r.people_affected / 4) * severityMult);
+      d.water += Math.ceil(r.people_affected * 2 * severityMult);
+      d.food += Math.ceil(r.people_affected * 1.4 * severityMult);
+      d.shelterBeds += Math.ceil((r.people_affected / 2) * severityMult);
+      if (r.need_type === "medicine" || r.need_type === "blood") d.medicine += Math.ceil(r.people_affected * 1.1 * severityMult);
+      if (r.need_type === "rescue") {
+        d.ambulances += Math.ceil(1 * severityMult);
+        d.boats += r.disaster_type === "flood" ? Math.ceil(1 * severityMult) : 0;
+      }
+      if (r.disaster_type === "flood") d.boats += Math.ceil(0.6 * severityMult);
+    }
+    const rows = ZONES.map((z) => {
+      const demand = demandByZone[z.name];
+      const supply = BASE_SUPPLY[z.name];
+      const gaps: ZoneResource = {
+        food: demand.food - supply.food,
+        water: demand.water - supply.water,
+        medicine: demand.medicine - supply.medicine,
+        ambulances: demand.ambulances - supply.ambulances,
+        boats: demand.boats - supply.boats,
+        volunteers: demand.volunteers - supply.volunteers,
+        shelterBeds: demand.shelterBeds - supply.shelterBeds,
+      };
+      return { zone: z.name, demand, supply, gaps };
+    });
+    return rows;
+  }, [reqs]);
+
+  const recommendations = useMemo(() => {
+    const tips: string[] = [];
+    const byNeed = (need: ResourceKey) => {
+      const shortage = zoneInsights.filter((z) => z.gaps[need] > 0).sort((a, b) => b.gaps[need] - a.gaps[need])[0];
+      const surplus = zoneInsights.filter((z) => z.gaps[need] < 0).sort((a, b) => a.gaps[need] - b.gaps[need])[0];
+      if (shortage && surplus) {
+        const qty = Math.max(1, Math.min(shortage.gaps[need], Math.abs(surplus.gaps[need])));
+        tips.push(`Move ${qty} ${need} from ${surplus.zone} to ${shortage.zone}.`);
+      }
+    };
+    byNeed("food");
+    byNeed("water");
+    byNeed("medicine");
+    byNeed("volunteers");
+    byNeed("ambulances");
+    const criticalZone = zoneInsights
+      .map((z) => ({ zone: z.zone, shortage: z.gaps.volunteers + z.gaps.ambulances + z.gaps.medicine }))
+      .sort((a, b) => b.shortage - a.shortage)[0];
+    if (criticalZone && criticalZone.shortage > 0) {
+      tips.push(`Dispatch rescue team to urgent cluster in ${criticalZone.zone}.`);
+    }
+    return tips.slice(0, 5);
+  }, [zoneInsights]);
+
+  const triageQueue = useMemo(() => {
+    return reqs
+      .filter((r) => r.status !== "completed" && r.status !== "cancelled")
+      .map((r) => {
+        const waitingMin = Math.max(1, Math.floor((Date.now() - new Date(r.created_at).getTime()) / 60000));
+        const score = Math.min(
+          100,
+          Math.round(
+            r.ai_score +
+            Math.log2(r.people_affected + 1) * 5 +
+            Math.min(15, waitingMin / 12)
+          )
+        );
+        return { ...r, triageScore: score };
+      })
+      .sort((a, b) => b.triageScore - a.triageScore)
+      .slice(0, 8);
+  }, [reqs]);
+
+  const seedDemoScenarios = async () => {
+    setSeedingDemo(true);
+    const now = Date.now();
+    const demo = [
+      { disaster_type: "flood", need_type: "rescue", people_affected: 18, description: "Flood in KR Puram, families trapped on first floor, water rising fast.", latitude: 13.0003, longitude: 77.6954, urgency: "critical", ai_score: 94 },
+      { disaster_type: "fire", need_type: "rescue", people_affected: 10, description: "Fire in Whitefield warehouse, smoke intense, road blocked.", latitude: 12.9698, longitude: 77.7499, urgency: "high", ai_score: 83 },
+      { disaster_type: "other", need_type: "food", people_affected: 65, description: "Food shortage in Hebbal camp, no supplies for 2 days.", latitude: 13.0352, longitude: 77.597, urgency: "high", ai_score: 79 },
+      { disaster_type: "medical", need_type: "medicine", people_affected: 7, description: "Medical emergency in Electronic City, child unconscious needs ambulance urgently.", latitude: 12.8456, longitude: 77.6603, urgency: "critical", ai_score: 92 },
+      { disaster_type: "flood", need_type: "transport", people_affected: 24, description: "Blocked road in Marathahalli, stranded residents and elderly.", latitude: 12.9591, longitude: 77.6974, urgency: "medium", ai_score: 61 },
+    ] as const;
+    const { error } = await supabase.from("emergency_requests").insert(
+      demo.map((d, i) => ({
+        reporter_id: user?.id || null,
+        reporter_name: "Demo Control",
+        reporter_phone: "9999999999",
+        disaster_type: d.disaster_type,
+        need_type: d.need_type,
+        people_affected: d.people_affected,
+        description: d.description,
+        latitude: d.latitude,
+        longitude: d.longitude,
+        urgency: d.urgency,
+        ai_score: d.ai_score,
+        created_at: new Date(now - i * 8 * 60_000).toISOString(),
+      }))
+    );
+    setSeedingDemo(false);
+    if (error) toast.error(error.message);
+    else toast.success("Bengaluru demo scenarios generated.");
+  };
+
   // Auth guard
   if (authLoading) {
     return (
@@ -237,6 +383,13 @@ function AdminPage() {
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-success pulse-ring" />
             <span className="text-xs text-muted-foreground">Live data · auto-updating</span>
+            <button
+              onClick={seedDemoScenarios}
+              disabled={seedingDemo}
+              className="ml-2 text-xs px-2.5 py-1 rounded-lg border border-border hover:border-primary/50 transition-colors"
+            >
+              {seedingDemo ? "Generating..." : "Generate Bengaluru Demo Data"}
+            </button>
           </div>
         </div>
 
@@ -267,6 +420,66 @@ function AdminPage() {
             })}
           </div>
         )}
+
+        <div className="grid lg:grid-cols-[1fr_1fr] gap-4 mb-6">
+          <div className="glass-strong rounded-2xl p-5 tilt-soft">
+            <h3 className="font-display font-semibold mb-3">AI Triage Queue</h3>
+            <div className="space-y-2">
+              {triageQueue.map((item) => (
+                <div key={item.id} className="glass rounded-xl p-3 text-xs card-3d">
+                  <div className="flex items-center justify-between">
+                    <span className="capitalize">{item.need_type} · {item.disaster_type}</span>
+                    <span className="font-bold text-primary">Score {item.triageScore}</span>
+                  </div>
+                  <div className="mt-1 text-muted-foreground line-clamp-1">{item.description}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="glass-strong rounded-2xl p-5 tilt-soft">
+            <h3 className="font-display font-semibold mb-3">Reallocation Recommendations</h3>
+            <div className="space-y-2 text-sm">
+              {recommendations.length === 0 ? (
+                <p className="text-muted-foreground">No urgent reallocations required right now.</p>
+              ) : recommendations.map((tip, i) => (
+                <div key={i} className="glass rounded-lg p-3">{tip}</div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="glass-strong rounded-2xl p-5 mb-6 tilt-soft">
+          <h3 className="font-display font-semibold mb-3">Zone-wise Resource Demand vs Supply</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                <tr>
+                  <th className="text-left p-2">Zone</th>
+                  <th className="text-left p-2">Food</th>
+                  <th className="text-left p-2">Medicine</th>
+                  <th className="text-left p-2">Ambulances</th>
+                  <th className="text-left p-2">Volunteers</th>
+                  <th className="text-left p-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {zoneInsights.map((z) => {
+                  const stress = z.gaps.food + z.gaps.medicine + z.gaps.ambulances * 25 + z.gaps.volunteers;
+                  return (
+                    <tr key={z.zone} className="border-t border-border/60">
+                      <td className="p-2 font-medium">{z.zone}</td>
+                      <td className="p-2">{z.demand.food}/{z.supply.food}</td>
+                      <td className="p-2">{z.demand.medicine}/{z.supply.medicine}</td>
+                      <td className="p-2">{z.demand.ambulances}/{z.supply.ambulances}</td>
+                      <td className="p-2">{z.demand.volunteers}/{z.supply.volunteers}</td>
+                      <td className={`p-2 font-semibold ${stress > 0 ? "text-warning" : "text-success"}`}>{stress > 0 ? "Shortage risk" : "Balanced"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
         {/* Map + Feed */}
         <div className="grid lg:grid-cols-[1fr_360px] gap-4 h-[500px] mb-6">
