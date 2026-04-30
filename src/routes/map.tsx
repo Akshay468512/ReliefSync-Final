@@ -28,6 +28,7 @@ interface Req {
   description: string;
   latitude: number;
   longitude: number;
+  resolved_place_name: string | null;
   urgency: Urgency;
   ai_score: number;
   status: string;
@@ -100,7 +101,7 @@ function MapPage() {
     urgency: r.urgency,
     title: `${r.need_type.toUpperCase()} · ${r.people_affected} people`,
     subtitle: `${r.urgency} · score ${r.ai_score} · ${r.status}`,
-    body: r.description.slice(0, 140),
+    body: `${r.resolved_place_name || `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}`} • ${r.description.slice(0, 120)}`,
     imageUrl: r.photo_url,
   }));
 
@@ -221,6 +222,7 @@ function RequestList({ requests, onSelect }: { requests: Req[]; onSelect: (id: s
           </div>
           <div className="font-semibold text-sm capitalize">{r.need_type} · {r.disaster_type}</div>
           <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{r.description}</div>
+          <div className="text-[11px] text-muted-foreground line-clamp-1 mt-1">{r.resolved_place_name || `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}`}</div>
           {r.photo_url && (
             <img src={r.photo_url} alt="incident" className="mt-2 h-20 w-full rounded-lg object-cover border border-border/60" />
           )}
@@ -244,7 +246,7 @@ function RequestDetail({ req, onBack }: { req: Req; onBack: () => void }) {
       <div className="mt-4 space-y-3 text-sm">
         <div className="flex items-start gap-2"><Users className="h-4 w-4 text-accent mt-0.5" /><div><div className="font-medium">{req.people_affected} people affected</div></div></div>
         <div className="flex items-start gap-2"><Clock className="h-4 w-4 text-accent mt-0.5" /><div>{formatDistanceToNow(new Date(req.created_at), { addSuffix: true })}</div></div>
-        <div className="flex items-start gap-2"><MapPin className="h-4 w-4 text-accent mt-0.5" /><div className="font-mono text-xs">{req.latitude.toFixed(4)}, {req.longitude.toFixed(4)}</div></div>
+        <div className="flex items-start gap-2"><MapPin className="h-4 w-4 text-accent mt-0.5" /><div><div className="text-sm">{req.resolved_place_name || "Location resolving..."}</div><div className="font-mono text-xs text-muted-foreground">{req.latitude.toFixed(4)}, {req.longitude.toFixed(4)}</div></div></div>
         <div className="glass rounded-lg p-3">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Description</div>
           <p>{req.description}</p>

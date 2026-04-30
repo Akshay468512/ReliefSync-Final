@@ -30,6 +30,7 @@ export type Database = {
           reporter_id: string | null
           reporter_name: string
           reporter_phone: string
+          resolved_place_name: string | null
           status: Database["public"]["Enums"]["request_status"]
           updated_at: string
           urgency: Database["public"]["Enums"]["urgency_level"]
@@ -49,6 +50,7 @@ export type Database = {
           reporter_id?: string | null
           reporter_name: string
           reporter_phone: string
+          resolved_place_name?: string | null
           status?: Database["public"]["Enums"]["request_status"]
           updated_at?: string
           urgency?: Database["public"]["Enums"]["urgency_level"]
@@ -68,6 +70,7 @@ export type Database = {
           reporter_id?: string | null
           reporter_name?: string
           reporter_phone?: string
+          resolved_place_name?: string | null
           status?: Database["public"]["Enums"]["request_status"]
           updated_at?: string
           urgency?: Database["public"]["Enums"]["urgency_level"]
@@ -76,36 +79,75 @@ export type Database = {
       }
       missions: {
         Row: {
+          alternate_route_polyline: Json | null
+          arrived_at: string | null
+          completed_at: string | null
           created_at: string
           eta_minutes: number | null
           id: string
+          latest_volunteer_lat: number | null
+          latest_volunteer_lng: number | null
           notes: string | null
           request_id: string
+          route_distance_km: number | null
+          route_duration_minutes: number | null
+          route_mode: string | null
+          route_polyline: Json | null
+          route_summary: string | null
+          started_at: string | null
           status: Database["public"]["Enums"]["mission_status"]
           updated_at: string
           volunteer_id: string
+          volunteer_start_lat: number | null
+          volunteer_start_lng: number | null
           volunteer_name: string
         }
         Insert: {
+          alternate_route_polyline?: Json | null
+          arrived_at?: string | null
+          completed_at?: string | null
           created_at?: string
           eta_minutes?: number | null
           id?: string
+          latest_volunteer_lat?: number | null
+          latest_volunteer_lng?: number | null
           notes?: string | null
           request_id: string
+          route_distance_km?: number | null
+          route_duration_minutes?: number | null
+          route_mode?: string | null
+          route_polyline?: Json | null
+          route_summary?: string | null
+          started_at?: string | null
           status?: Database["public"]["Enums"]["mission_status"]
           updated_at?: string
           volunteer_id: string
+          volunteer_start_lat?: number | null
+          volunteer_start_lng?: number | null
           volunteer_name: string
         }
         Update: {
+          alternate_route_polyline?: Json | null
+          arrived_at?: string | null
+          completed_at?: string | null
           created_at?: string
           eta_minutes?: number | null
           id?: string
+          latest_volunteer_lat?: number | null
+          latest_volunteer_lng?: number | null
           notes?: string | null
           request_id?: string
+          route_distance_km?: number | null
+          route_duration_minutes?: number | null
+          route_mode?: string | null
+          route_polyline?: Json | null
+          route_summary?: string | null
+          started_at?: string | null
           status?: Database["public"]["Enums"]["mission_status"]
           updated_at?: string
           volunteer_id?: string
+          volunteer_start_lat?: number | null
+          volunteer_start_lng?: number | null
           volunteer_name?: string
         }
         Relationships: [

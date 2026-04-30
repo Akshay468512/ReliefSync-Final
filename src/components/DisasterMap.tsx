@@ -1,5 +1,4 @@
-import { useEffect, useRef } from "react";
-import L from "leaflet";
+import { useEffect, useRef, useState } from "react";
 import type { Urgency } from "@/lib/ai-scoring";
 import { URGENCY_COLORS } from "@/lib/ai-scoring";
 
@@ -23,18 +22,22 @@ interface Props {
   pickable?: boolean;
   picked?: [number, number] | null;
   onPick?: (lat: number, lng: number) => void;
+  routePath?: [number, number][] | null;
+  alternateRoutePath?: [number, number][] | null;
+  volunteerPosition?: [number, number] | null;
+  destinationPosition?: [number, number] | null;
 }
 
 const BENGALURU: [number, number] = [12.9716, 77.5946];
 
-function makeIcon(urgency: Urgency) {
+function makeIcon(leaflet: any, urgency: Urgency) {
   const color = URGENCY_COLORS[urgency];
   const html = `
     <div style="position:relative;">
       <div style="position:absolute;inset:-8px;border-radius:9999px;background:${color};opacity:0.3;animation:pulse-ring 2s infinite;"></div>
       <div style="width:22px;height:22px;border-radius:9999px;background:${color};border:3px solid white;box-shadow:0 4px 12px rgba(0,0,0,0.4);"></div>
     </div>`;
-  return L.divIcon({
+  return leaflet.divIcon({
     html,
     className: "",
     iconSize: [22, 22],
@@ -42,13 +45,6 @@ function makeIcon(urgency: Urgency) {
     popupAnchor: [0, -12],
   });
 }
-
-const PICK_ICON = L.divIcon({
-  html: `<div style="width:30px;height:30px;border-radius:9999px;background:oklch(0.7 0.22 25);border:4px solid white;box-shadow:0 4px 16px rgba(0,0,0,0.5);"></div>`,
-  className: "",
-  iconSize: [30, 30],
-  iconAnchor: [15, 15],
-});
 
 export function DisasterMap({
   markers,
@@ -59,44 +55,68 @@ export function DisasterMap({
   pickable = false,
   picked = null,
   onPick,
+  routePath = null,
+  alternateRoutePath = null,
+  volunteerPosition = null,
+  destinationPosition = null,
 }: Props) {
+  const [mapReady, setMapReady] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const layerRef = useRef<L.LayerGroup | null>(null);
-  const pickMarkerRef = useRef<L.Marker | null>(null);
+  const leafletRef = useRef<any | null>(null);
+  const mapRef = useRef<any | null>(null);
+  const layerRef = useRef<any | null>(null);
+  const pickMarkerRef = useRef<any | null>(null);
+  const routeLineRef = useRef<any | null>(null);
+  const alternateRouteLineRef = useRef<any | null>(null);
+  const volunteerMarkerRef = useRef<any | null>(null);
+  const destinationMarkerRef = useRef<any | null>(null);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, {
-      center,
-      zoom,
-      zoomControl: true,
-      attributionControl: true,
-    });
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: '&copy; OpenStreetMap &copy; CARTO',
-      maxZoom: 19,
-    }).addTo(map);
-    layerRef.current = L.layerGroup().addTo(map);
-    mapRef.current = map;
+    let mounted = true;
+    let map: any | null = null;
 
-    if (pickable && onPick) {
-      map.on("click", (e: L.LeafletMouseEvent) => onPick(e.latlng.lat, e.latlng.lng));
-    }
+    void import("leaflet").then((leaflet) => {
+      if (!mounted || !containerRef.current) return;
+      leafletRef.current = leaflet;
+      map = leaflet.map(containerRef.current, {
+        center,
+        zoom,
+        zoomControl: true,
+        attributionControl: true,
+      });
+      leaflet.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+        attribution: "&copy; OpenStreetMap &copy; CARTO",
+        maxZoom: 19,
+      }).addTo(map);
+      layerRef.current = leaflet.layerGroup().addTo(map);
+      mapRef.current = map;
+      setMapReady(true);
+
+      if (pickable && onPick) {
+        map.on("click", (e: any) => onPick(e.latlng.lat, e.latlng.lng));
+      }
+    });
+
     return () => {
-      map.remove();
+      mounted = false;
+      map?.remove();
       mapRef.current = null;
+      layerRef.current = null;
+      leafletRef.current = null;
+      setMapReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update markers
   useEffect(() => {
+    const leaflet = leafletRef.current;
     const layer = layerRef.current;
-    if (!layer) return;
+    if (!leaflet || !layer) return;
     layer.clearLayers();
     markers.forEach((m) => {
-      const marker = L.marker([m.lat, m.lng], { icon: makeIcon(m.urgency) });
+      const marker = leaflet.marker([m.lat, m.lng], { icon: makeIcon(leaflet, m.urgency) });
       const popup = `
         <div style="min-width:200px;padding:4px;">
           <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${m.title}</div>
@@ -108,19 +128,93 @@ export function DisasterMap({
       if (onSelect) marker.on("click", () => onSelect(m.id));
       marker.addTo(layer);
     });
-  }, [markers, onSelect]);
+  }, [markers, onSelect, mapReady]);
 
   // Pick marker
   useEffect(() => {
-    if (!mapRef.current) return;
+    const leaflet = leafletRef.current;
+    if (!leaflet || !mapRef.current) return;
     if (pickMarkerRef.current) {
       pickMarkerRef.current.remove();
       pickMarkerRef.current = null;
     }
     if (picked) {
-      pickMarkerRef.current = L.marker(picked, { icon: PICK_ICON }).addTo(mapRef.current);
+      const pickIcon = leaflet.divIcon({
+        html: `<div style="width:30px;height:30px;border-radius:9999px;background:oklch(0.7 0.22 25);border:4px solid white;box-shadow:0 4px 16px rgba(0,0,0,0.5);"></div>`,
+        className: "",
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+      });
+      pickMarkerRef.current = leaflet.marker(picked, { icon: pickIcon }).addTo(mapRef.current);
     }
-  }, [picked]);
+  }, [picked, mapReady]);
+
+  useEffect(() => {
+    const leaflet = leafletRef.current;
+    if (!leaflet || !mapRef.current) return;
+    if (routeLineRef.current) {
+      routeLineRef.current.remove();
+      routeLineRef.current = null;
+    }
+    if (alternateRouteLineRef.current) {
+      alternateRouteLineRef.current.remove();
+      alternateRouteLineRef.current = null;
+    }
+
+    if (alternateRoutePath?.length) {
+      alternateRouteLineRef.current = leaflet.polyline(alternateRoutePath, {
+        color: "oklch(0.75 0.12 240)",
+        weight: 4,
+        opacity: 0.55,
+        dashArray: "8 8",
+      }).addTo(mapRef.current);
+    }
+
+    if (routePath?.length) {
+      routeLineRef.current = leaflet.polyline(routePath, {
+        color: "oklch(0.74 0.23 165)",
+        weight: 5,
+        opacity: 0.95,
+      }).addTo(mapRef.current);
+      mapRef.current.fitBounds(routeLineRef.current.getBounds(), { padding: [40, 40] });
+    }
+  }, [routePath, alternateRoutePath, mapReady]);
+
+  useEffect(() => {
+    const leaflet = leafletRef.current;
+    if (!leaflet || !mapRef.current) return;
+    if (volunteerMarkerRef.current) {
+      volunteerMarkerRef.current.remove();
+      volunteerMarkerRef.current = null;
+    }
+    if (volunteerPosition) {
+      volunteerMarkerRef.current = leaflet.circleMarker(volunteerPosition, {
+        radius: 8,
+        color: "oklch(0.75 0.15 200)",
+        weight: 2,
+        fillOpacity: 0.85,
+      }).addTo(mapRef.current);
+      volunteerMarkerRef.current.bindTooltip("Volunteer", { direction: "top" });
+    }
+  }, [volunteerPosition, mapReady]);
+
+  useEffect(() => {
+    const leaflet = leafletRef.current;
+    if (!leaflet || !mapRef.current) return;
+    if (destinationMarkerRef.current) {
+      destinationMarkerRef.current.remove();
+      destinationMarkerRef.current = null;
+    }
+    if (destinationPosition) {
+      destinationMarkerRef.current = leaflet.circleMarker(destinationPosition, {
+        radius: 9,
+        color: "oklch(0.65 0.25 20)",
+        weight: 2,
+        fillOpacity: 0.9,
+      }).addTo(mapRef.current);
+      destinationMarkerRef.current.bindTooltip("Destination", { direction: "top" });
+    }
+  }, [destinationPosition, mapReady]);
 
   return <div ref={containerRef} style={{ height, width: "100%" }} className="rounded-2xl overflow-hidden" />;
 }

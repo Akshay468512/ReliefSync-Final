@@ -8,11 +8,13 @@ import { Label } from "@/components/ui/label";
 import { UrgencyBadge } from "@/components/UrgencyBadge";
 import { LeaderBoard } from "@/components/LeaderBoard";
 import { SkeletonList, SkeletonStat } from "@/components/SkeletonLoader";
+import { DisasterMap, type MapMarker } from "@/components/DisasterMap";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import type { Urgency } from "@/lib/ai-scoring";
 import { distanceKm } from "@/lib/ai-scoring";
+import { getRoutePlan, type TravelMode } from "@/lib/route-navigation";
 import { Users, MapPin, Clock, Phone, Truck, CheckCircle2, Navigation, AlertTriangle, Trophy } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -31,6 +33,7 @@ interface Req {
   description: string;
   latitude: number;
   longitude: number;
+  resolved_place_name: string | null;
   urgency: Urgency;
   ai_score: number;
   status: string;
@@ -43,6 +46,14 @@ interface Mission {
   status: "accepted" | "on_the_way" | "completed" | "cancelled";
   eta_minutes: number | null;
   volunteer_id: string;
+  route_distance_km: number | null;
+  route_duration_minutes: number | null;
+  route_mode: TravelMode | null;
+  route_polyline: [number, number][] | null;
+  alternate_route_polyline: [number, number][] | null;
+  latest_volunteer_lat: number | null;
+  latest_volunteer_lng: number | null;
+  arrived_at: string | null;
 }
 
 const BENGALURU: [number, number] = [12.9716, 77.5946];
@@ -57,6 +68,7 @@ function VolunteerPage() {
   const [skills, setSkills] = useState(profile?.skills?.join(", ") || "");
   const [hasVehicle, setHasVehicle] = useState(profile?.has_vehicle || false);
   const [loading, setLoading] = useState(true);
+  const [travelMode, setTravelMode] = useState<TravelMode>("car");
 
   useEffect(() => {
     setSkills(profile?.skills?.join(", ") || "");
@@ -64,12 +76,17 @@ function VolunteerPage() {
   }, [profile]);
 
   useEffect(() => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (p) => setMyLoc([p.coords.latitude, p.coords.longitude]),
-        () => {}
-      );
-    }
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (p) => setMyLoc([p.coords.latitude, p.coords.longitude]),
+      () => {}
+    );
+    const watchId = navigator.geolocation.watchPosition(
+      (p) => setMyLoc([p.coords.latitude, p.coords.longitude]),
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 15000, timeout: 10000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
   const load = async () => {
@@ -115,25 +132,58 @@ function VolunteerPage() {
       toast.warning("Enough volunteers already assigned to this request.");
       return;
     }
-    const eta = Math.max(5, Math.round(distanceKm(myLoc[0], myLoc[1], req.latitude, req.longitude) * 4));
+    const fallbackEta = Math.max(5, Math.round(distanceKm(myLoc[0], myLoc[1], req.latitude, req.longitude) * 4));
+    let routeDistance = distanceKm(myLoc[0], myLoc[1], req.latitude, req.longitude);
+    let routeDuration = fallbackEta;
+    let routePolyline: [number, number][] | null = null;
+    let alternateRoutePolyline: [number, number][] | null = null;
+    try {
+      const routePlan = await getRoutePlan(myLoc, [req.latitude, req.longitude], travelMode);
+      if (routePlan.fastest) {
+        routeDistance = routePlan.fastest.distanceKm;
+        routeDuration = Math.max(3, Math.round(routePlan.fastest.durationMin));
+        routePolyline = routePlan.fastest.geometry;
+        alternateRoutePolyline = routePlan.alternate?.geometry || null;
+      }
+    } catch {
+      // Silent fallback to distance-based estimation.
+    }
     const { error } = await supabase.from("missions").insert({
       request_id: req.id,
       volunteer_id: user.id,
       volunteer_name: profile?.full_name || "Volunteer",
       status: "accepted",
-      eta_minutes: eta,
+      eta_minutes: routeDuration,
+      volunteer_start_lat: myLoc[0],
+      volunteer_start_lng: myLoc[1],
+      latest_volunteer_lat: myLoc[0],
+      latest_volunteer_lng: myLoc[1],
+      route_distance_km: routeDistance,
+      route_duration_minutes: routeDuration,
+      route_mode: travelMode,
+      route_polyline: routePolyline,
+      alternate_route_polyline: alternateRoutePolyline,
+      started_at: new Date().toISOString(),
     });
     if (error) {
       toast.error(error.message);
       return;
     }
-    toast.success(`Mission accepted · ETA ${eta}m`);
+    toast.success(`You are assigned to ${req.need_type} at ${req.resolved_place_name || "incident location"}. ETA ${routeDuration} mins.`);
   };
 
   const updateStatus = async (missionId: string, status: Mission["status"]) => {
-    const { error } = await supabase.from("missions").update({ status }).eq("id", missionId);
+    const patch: Record<string, unknown> = { status };
+    if (status === "completed") patch.completed_at = new Date().toISOString();
+    const { error } = await supabase.from("missions").update(patch).eq("id", missionId);
     if (error) toast.error(error.message);
     else toast.success(`Status: ${status.replace("_", " ")}`);
+  };
+
+  const markArrived = async (missionId: string) => {
+    const { error } = await supabase.from("missions").update({ arrived_at: new Date().toISOString() }).eq("id", missionId);
+    if (error) toast.error(error.message);
+    else toast.success("Arrived at destination.");
   };
 
   const saveProfile = async () => {
@@ -145,6 +195,15 @@ function VolunteerPage() {
     if (error) toast.error(error.message);
     else toast.success("Profile updated");
   };
+
+  useEffect(() => {
+    const active = missions.find((m) => m.status === "accepted" || m.status === "on_the_way");
+    if (!active) return;
+    supabase
+      .from("missions")
+      .update({ latest_volunteer_lat: myLoc[0], latest_volunteer_lng: myLoc[1] })
+      .eq("id", active.id);
+  }, [myLoc, missions]);
 
   if (!user) {
     return (
@@ -162,6 +221,24 @@ function VolunteerPage() {
 
   const activeMissions = missions.filter((m) => m.status === "accepted" || m.status === "on_the_way");
   const completedCount = missions.filter((m) => m.status === "completed").length;
+  const selectedMission = activeMissions[0] || null;
+  const selectedRequest = selectedMission ? requests.find((r) => r.id === selectedMission.request_id) || null : null;
+  const etaRemaining = selectedMission?.eta_minutes
+    ? Math.max(1, selectedMission.eta_minutes - Math.floor((Date.now() - new Date(selectedMission.created_at).getTime()) / 60000))
+    : null;
+  const missionRouteProgress = selectedMission?.route_distance_km
+    ? Math.max(0, Math.min(100, ((selectedMission.route_distance_km - distanceKm(myLoc[0], myLoc[1], selectedRequest?.latitude || myLoc[0], selectedRequest?.longitude || myLoc[1])) / selectedMission.route_distance_km) * 100))
+    : 0;
+  const navMarkers: MapMarker[] = selectedRequest
+    ? [{
+        id: selectedRequest.id,
+        lat: selectedRequest.latitude,
+        lng: selectedRequest.longitude,
+        urgency: selectedRequest.urgency,
+        title: `${selectedRequest.need_type} · ${selectedRequest.people_affected} people`,
+        subtitle: selectedRequest.resolved_place_name || "Destination",
+      }]
+    : [];
 
   return (
     <div className="min-h-screen">
@@ -195,6 +272,35 @@ function VolunteerPage() {
 
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
           <div className="space-y-3">
+            {selectedMission && selectedRequest && (
+              <div className="glass-strong rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <h2 className="font-display font-bold text-lg">Disaster Response Navigation Panel</h2>
+                  <span className="text-xs glass rounded-full px-3 py-1.5">Route progress {missionRouteProgress.toFixed(0)}%</span>
+                </div>
+                <div className="h-[260px] rounded-xl overflow-hidden">
+                  <DisasterMap
+                    markers={navMarkers}
+                    height="100%"
+                    routePath={selectedMission.route_polyline}
+                    alternateRoutePath={selectedMission.alternate_route_polyline}
+                    volunteerPosition={myLoc}
+                    destinationPosition={[selectedRequest.latitude, selectedRequest.longitude]}
+                  />
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                  <div className="glass rounded-lg p-2">ETA: <span className="font-semibold">{etaRemaining ? `${etaRemaining} min` : "Calculating"}</span></div>
+                  <div className="glass rounded-lg p-2">Distance: <span className="font-semibold">{selectedMission.route_distance_km?.toFixed(1) || distanceKm(myLoc[0], myLoc[1], selectedRequest.latitude, selectedRequest.longitude).toFixed(1)} km</span></div>
+                  <div className="glass rounded-lg p-2">Mode: <span className="font-semibold capitalize">{selectedMission.route_mode || travelMode}</span></div>
+                  <div className="glass rounded-lg p-2 line-clamp-1">{selectedRequest.resolved_place_name || "Destination pinned"}</div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <a href={`tel:${selectedRequest.reporter_phone}`}><Button size="sm" variant="outline"><Phone className="h-3.5 w-3.5 mr-1" /> Contact requester</Button></a>
+                  {!selectedMission.arrived_at && <Button size="sm" variant="outline" onClick={() => markArrived(selectedMission.id)}>Mark arrived</Button>}
+                  <Button size="sm" className="gradient-hero border-0" onClick={() => updateStatus(selectedMission.id, "completed")}><CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Mark completed</Button>
+                </div>
+              </div>
+            )}
             <h2 className="font-display font-bold text-lg">Mission feed (nearest critical first)</h2>
             {sortedNearby.length === 0 && (
               <div className="glass-strong rounded-2xl p-10 text-center text-muted-foreground">No active requests right now. Stay ready.</div>
@@ -209,10 +315,12 @@ function VolunteerPage() {
                         <UrgencyBadge urgency={r.urgency} score={r.ai_score} />
                         <span className="text-xs text-muted-foreground capitalize">{r.disaster_type}</span>
                         <span className="text-xs text-muted-foreground">· {r.distance.toFixed(1)} km away</span>
+                        <span className="text-xs text-muted-foreground capitalize">· {travelMode}</span>
                         <span className="text-xs text-muted-foreground">· {formatDistanceToNow(new Date(r.created_at), { addSuffix: true })}</span>
                       </div>
                       <h3 className="font-display font-bold text-lg mt-2 capitalize">{r.need_type} · {r.people_affected} {r.people_affected === 1 ? "person" : "people"}</h3>
                       <p className="text-sm text-muted-foreground mt-1">{r.description}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{r.resolved_place_name || `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}`}</p>
                       <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1"><Users className="h-3 w-3" /> {r.assigned}/{MAX_VOLUNTEERS_PER_REQUEST} volunteers</span>
                         <a href={`tel:${r.reporter_phone}`} className="flex items-center gap-1 text-primary"><Phone className="h-3 w-3" /> {r.reporter_phone}</a>
@@ -253,6 +361,16 @@ function VolunteerPage() {
           </div>
 
           <div className="space-y-3">
+            <div className="glass-strong rounded-2xl p-5 tilt-soft">
+              <h3 className="font-display font-bold mb-3">Route preferences</h3>
+              <div className="flex gap-2">
+                {(["car", "bike", "walking"] as TravelMode[]).map((mode) => (
+                  <Button key={mode} size="sm" variant={travelMode === mode ? "default" : "outline"} onClick={() => setTravelMode(mode)} className={travelMode === mode ? "gradient-cool border-0" : ""}>
+                    {mode}
+                  </Button>
+                ))}
+              </div>
+            </div>
             <div className="glass-strong rounded-2xl p-5 tilt-soft">
               <h3 className="font-display font-bold mb-3">Volunteer profile</h3>
               <div className="space-y-3">

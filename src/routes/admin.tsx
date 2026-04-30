@@ -9,6 +9,7 @@ import { SkeletonStat } from "@/components/SkeletonLoader";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import type { Urgency } from "@/lib/ai-scoring";
+import { distanceKm } from "@/lib/ai-scoring";
 import { useCountUp } from "@/lib/use-count-up";
 import { toast } from "sonner";
 import {
@@ -34,6 +35,7 @@ interface Req {
   description: string;
   latitude: number;
   longitude: number;
+  resolved_place_name: string | null;
   urgency: Urgency;
   ai_score: number;
   status: string;
@@ -46,6 +48,11 @@ interface Mission {
   volunteer_name: string;
   status: string;
   created_at: string;
+  eta_minutes: number | null;
+  route_distance_km: number | null;
+  latest_volunteer_lat: number | null;
+  latest_volunteer_lng: number | null;
+  route_mode: string | null;
 }
 
 const URGENCY_CHART_COLORS: Record<string, string> = {
@@ -180,7 +187,7 @@ function AdminPage() {
     lng: r.longitude,
     urgency: r.urgency,
     title: `${r.need_type} · ${r.people_affected}`,
-    subtitle: r.urgency,
+    subtitle: `${r.urgency} · ${r.resolved_place_name || "location pinned"}`,
   }));
 
   const feed = useMemo(() => {
@@ -310,6 +317,43 @@ function AdminPage() {
       .sort((a, b) => b.triageScore - a.triageScore)
       .slice(0, 8);
   }, [reqs]);
+
+  const dispatchRows = useMemo(() => {
+    const active = missions.filter((m) => m.status === "accepted" || m.status === "on_the_way");
+    return active.map((mission) => {
+      const req = reqs.find((r) => r.id === mission.request_id);
+      if (!req) return null;
+      const remainingKm = (mission.latest_volunteer_lat != null && mission.latest_volunteer_lng != null)
+        ? distanceKm(mission.latest_volunteer_lat, mission.latest_volunteer_lng, req.latitude, req.longitude)
+        : null;
+      const progress = mission.route_distance_km && remainingKm != null
+        ? Math.max(0, Math.min(100, ((mission.route_distance_km - remainingKm) / mission.route_distance_km) * 100))
+        : 0;
+      const delay = mission.eta_minutes != null && new Date(req.created_at).getTime() + mission.eta_minutes * 60_000 < Date.now();
+      const nearestBackup = missions
+        .filter((m) => m.id !== mission.id && (m.status === "accepted" || m.status === "on_the_way") && m.latest_volunteer_lat != null && m.latest_volunteer_lng != null)
+        .map((m) => ({
+          volunteerName: m.volunteer_name,
+          km: distanceKm(m.latest_volunteer_lat!, m.latest_volunteer_lng!, req.latitude, req.longitude),
+        }))
+        .sort((a, b) => a.km - b.km)[0];
+      return {
+        mission,
+        req,
+        remainingKm,
+        progress,
+        delay,
+        nearestBackup,
+      };
+    }).filter(Boolean) as Array<{
+      mission: Mission;
+      req: Req;
+      remainingKm: number | null;
+      progress: number;
+      delay: boolean;
+      nearestBackup?: { volunteerName: string; km: number };
+    }>;
+  }, [missions, reqs]);
 
   const seedDemoScenarios = async () => {
     setSeedingDemo(true);
@@ -481,6 +525,33 @@ function AdminPage() {
           </div>
         </div>
 
+        <div className="glass-strong rounded-2xl p-5 mb-6 tilt-soft">
+          <h3 className="font-display font-semibold mb-3">Admin Dispatch View</h3>
+          {dispatchRows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No active dispatches.</p>
+          ) : (
+            <div className="space-y-2">
+              {dispatchRows.slice(0, 8).map(({ mission, req, progress, remainingKm, delay, nearestBackup }) => (
+                <div key={mission.id} className="glass rounded-xl p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold">{mission.volunteer_name} → {req.need_type} ({req.resolved_place_name || "location pinned"})</div>
+                    <div className={`${delay ? "text-warning" : "text-success"} font-semibold`}>{delay ? "Delay risk" : "On track"}</div>
+                  </div>
+                  <div className="text-muted-foreground mt-1">
+                    ETA {mission.eta_minutes ?? "-"} min · remaining {remainingKm?.toFixed(1) ?? "-"} km · mode {mission.route_mode || "car"}
+                  </div>
+                  <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+                    <div className="h-full bg-primary transition-all" style={{ width: `${progress.toFixed(0)}%` }} />
+                  </div>
+                  <div className="mt-1 text-muted-foreground">
+                    Backup volunteer: {nearestBackup ? `${nearestBackup.volunteerName} (${nearestBackup.km.toFixed(1)} km)` : "Not available"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Map + Feed */}
         <div className="grid lg:grid-cols-[1fr_360px] gap-4 h-[500px] mb-6">
           <div className="glass-strong rounded-2xl p-3 relative tilt-soft">
@@ -560,6 +631,7 @@ function AdminPage() {
                 </Pie>
                 <Tooltip
                   contentStyle={{ background: "oklch(0.22 0.025 250)", border: "1px solid oklch(0.3 0.02 250)", borderRadius: 8, fontSize: 12 }}
+                  itemStyle={{ color: "oklch(0.98 0.005 250)" }}
                 />
                 <Legend
                   formatter={(v) => <span style={{ fontSize: 11, color: "oklch(0.7 0.02 250)" }}>{v}</span>}
@@ -612,6 +684,7 @@ function AdminPage() {
                   <th className="text-left p-3">People</th>
                   <th className="text-left p-3">Status</th>
                   <th className="text-left p-3">When</th>
+                  <th className="text-left p-3">Location</th>
                   <th className="text-left p-3">Description</th>
                 </tr>
               </thead>
@@ -623,6 +696,7 @@ function AdminPage() {
                     <td className="p-3">{r.people_affected}</td>
                     <td className="p-3 capitalize text-xs">{r.status.replace("_", " ")}</td>
                     <td className="p-3 text-xs text-muted-foreground">{formatDistanceToNow(new Date(r.created_at), { addSuffix: true })}</td>
+                    <td className="p-3 text-xs text-muted-foreground max-w-[220px] truncate">{r.resolved_place_name || `${r.latitude.toFixed(4)}, ${r.longitude.toFixed(4)}`}</td>
                     <td className="p-3 text-xs text-muted-foreground max-w-[300px] truncate">{r.description}</td>
                   </tr>
                 ))}

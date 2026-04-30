@@ -159,7 +159,7 @@ export function PhotoUploadField({ value, onChange }: PhotoUploadFieldProps) {
 
   return (
     <div className="space-y-2.5">
-      <Label>Photo (optional)</Label>
+      <Label>Photo</Label>
       <div className="glass rounded-xl p-3">
         {value ? (
           <motion.div
