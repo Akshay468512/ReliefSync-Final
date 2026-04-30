@@ -17,6 +17,7 @@ export type Database = {
       emergency_requests: {
         Row: {
           address: string | null
+          ai_summary: string | null
           ai_score: number
           created_at: string
           description: string
@@ -32,11 +33,13 @@ export type Database = {
           reporter_phone: string
           resolved_place_name: string | null
           status: Database["public"]["Enums"]["request_status"]
+          triage_summary: string | null
           updated_at: string
           urgency: Database["public"]["Enums"]["urgency_level"]
         }
         Insert: {
           address?: string | null
+          ai_summary?: string | null
           ai_score?: number
           created_at?: string
           description?: string
@@ -52,11 +55,13 @@ export type Database = {
           reporter_phone: string
           resolved_place_name?: string | null
           status?: Database["public"]["Enums"]["request_status"]
+          triage_summary?: string | null
           updated_at?: string
           urgency?: Database["public"]["Enums"]["urgency_level"]
         }
         Update: {
           address?: string | null
+          ai_summary?: string | null
           ai_score?: number
           created_at?: string
           description?: string
@@ -72,6 +77,7 @@ export type Database = {
           reporter_phone?: string
           resolved_place_name?: string | null
           status?: Database["public"]["Enums"]["request_status"]
+          triage_summary?: string | null
           updated_at?: string
           urgency?: Database["public"]["Enums"]["urgency_level"]
         }

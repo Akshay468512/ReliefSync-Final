@@ -51,6 +51,7 @@ function SubmitPage() {
   const [resolvedPlace, setResolvedPlace] = useState<string>("");
   const [photoUrl, setPhotoUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [triageLoading, setTriageLoading] = useState(false);
   const [duplicates, setDuplicates] = useState<{ id: string; description: string }[]>([]);
   const [confirmDup, setConfirmDup] = useState(false);
   const [triagePreview, setTriagePreview] = useState<TriageOutput | null>(null);
@@ -97,6 +98,7 @@ function SubmitPage() {
   useEffect(() => {
     let mounted = true;
     if (!coords) return;
+    setTriageLoading(true);
     runTriageAgent({
       imageUrl: photoUrl || undefined,
       description,
@@ -107,9 +109,15 @@ function SubmitPage() {
       duplicateCount: duplicates.length,
       timestamp: new Date(),
     }).then((result) => {
-      if (mounted) setTriagePreview(result);
+      if (mounted) {
+        setTriagePreview(result);
+        setTriageLoading(false);
+      }
     }).catch(() => {
-      if (mounted) setTriagePreview(null);
+      if (mounted) {
+        setTriagePreview(null);
+        setTriageLoading(false);
+      }
     });
     return () => {
       mounted = false;
@@ -246,6 +254,8 @@ function SubmitPage() {
       photo_url: photoUrl || null,
       urgency: triage.priorityLabel || fallback.urgency,
       ai_score: triage.criticalityScore || fallback.score,
+      ai_summary: triage.summary || null,
+      triage_summary: triage.summary || null,
     });
     setSubmitting(false);
     if (error) {
@@ -487,10 +497,15 @@ function SubmitPage() {
                       score={triagePreview?.criticalityScore || fallbackPreview.score}
                     />
                   </div>
+                  {triageLoading && <div className="text-xs text-accent mb-2">Analyzing image + text + geo context...</div>}
                   <div className="text-xs text-muted-foreground space-y-0.5">
                     {(triagePreview?.reasoning || fallbackPreview.reasons).map((r, i) => <div key={i}>· {r}</div>)}
                     {triagePreview?.recommendedResourceType && <div>· Recommended resource: {triagePreview.recommendedResourceType}</div>}
+                    {triagePreview?.recommendedResponder && <div>· Suggested responder: {triagePreview.recommendedResponder.replace("_", " ")}</div>}
                     {triagePreview?.etaUrgencyLevel && <div>· ETA urgency: {triagePreview.etaUrgencyLevel}</div>}
+                    {typeof triagePreview?.duplicateProbability === "number" && <div>· Duplicate probability: {triagePreview.duplicateProbability}%</div>}
+                    {typeof triagePreview?.confidenceScore === "number" && <div>· Confidence: {triagePreview.confidenceScore}%</div>}
+                    {triagePreview?.summary && <div>· Summary: {triagePreview.summary}</div>}
                   </div>
                 </div>
 

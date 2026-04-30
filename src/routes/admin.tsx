@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import type { Urgency } from "@/lib/ai-scoring";
 import { distanceKm } from "@/lib/ai-scoring";
+import { runTriageAgent } from "@/lib/triage-agent";
 import { useCountUp } from "@/lib/use-count-up";
 import { toast } from "sonner";
 import {
@@ -38,6 +39,8 @@ interface Req {
   resolved_place_name: string | null;
   urgency: Urgency;
   ai_score: number;
+  ai_summary: string | null;
+  triage_summary: string | null;
   status: string;
   created_at: string;
 }
@@ -121,6 +124,8 @@ function AdminPage() {
   const [volunteerCount, setVolunteerCount] = useState(0);
   const [dataLoading, setDataLoading] = useState(true);
   const [seedingDemo, setSeedingDemo] = useState(false);
+  const [triageTestsRunning, setTriageTestsRunning] = useState(false);
+  const [triageCaseResults, setTriageCaseResults] = useState<Array<{ name: string; score: number; priority: string; passed: boolean }>>([]);
 
   const load = async () => {
     const [{ data: r }, { data: m }, { data: v }] = await Promise.all([
@@ -386,6 +391,86 @@ function AdminPage() {
     else toast.success("Bengaluru demo scenarios generated.");
   };
 
+  const runTriageDemoCases = async () => {
+    setTriageTestsRunning(true);
+    try {
+      const cases = [
+        {
+          name: "Case 1: Flood + child injured",
+          input: {
+            description: "Severe flood water rising fast, child injured and trapped on rooftop, people stranded.",
+            latitude: 13.0003,
+            longitude: 77.6954,
+            peopleAffected: 6,
+            needType: "rescue" as const,
+            duplicateCount: 0,
+            weatherSeverity: 88,
+            timestamp: new Date(Date.now() - 20 * 60_000),
+          },
+          pass: (score: number, priority: string) => score > 90 && priority === "critical",
+        },
+        {
+          name: "Case 2: Food needed for 2 adults",
+          input: {
+            description: "Need food for 2 adults in safe shelter area.",
+            latitude: 12.9591,
+            longitude: 77.6974,
+            peopleAffected: 2,
+            needType: "food" as const,
+            duplicateCount: 0,
+            weatherSeverity: 20,
+            timestamp: new Date(),
+          },
+          pass: (_score: number, priority: string) => priority === "medium",
+        },
+        {
+          name: "Case 3: Apartment fire trapped residents",
+          input: {
+            description: "Apartment fire spreading quickly, multiple residents trapped inside and smoke everywhere.",
+            latitude: 12.9698,
+            longitude: 77.7499,
+            peopleAffected: 14,
+            needType: "rescue" as const,
+            duplicateCount: 0,
+            weatherSeverity: 72,
+            timestamp: new Date(Date.now() - 10 * 60_000),
+          },
+          pass: (_score: number, priority: string) => priority === "critical",
+        },
+        {
+          name: "Case 4: Duplicate nearby report",
+          input: {
+            description: "Flood rescue needed near KR Puram underpass. Families trapped and requesting help.",
+            latitude: 13.00035,
+            longitude: 77.69542,
+            peopleAffected: 5,
+            needType: "rescue" as const,
+            duplicateCount: 2,
+            weatherSeverity: 84,
+            timestamp: new Date(),
+          },
+          pass: (_score: number, _priority: string, duplicateProbability: number) => duplicateProbability >= 45,
+        },
+      ];
+
+      const outputs = await Promise.all(cases.map((c) => runTriageAgent(c.input)));
+      const results = outputs.map((out, idx) => ({
+        name: cases[idx].name,
+        score: out.criticalityScore,
+        priority: out.priorityLabel,
+        passed: cases[idx].pass(out.criticalityScore, out.priorityLabel, out.duplicateProbability),
+      }));
+      setTriageCaseResults(results);
+      const failCount = results.filter((r) => !r.passed).length;
+      if (failCount === 0) toast.success("All TRIAGE AGENT test cases passed.");
+      else toast.warning(`${failCount} triage test case(s) failed.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to run triage test cases.");
+    } finally {
+      setTriageTestsRunning(false);
+    }
+  };
+
   // Auth guard
   if (authLoading) {
     return (
@@ -434,8 +519,31 @@ function AdminPage() {
             >
               {seedingDemo ? "Generating..." : "Generate Bengaluru Demo Data"}
             </button>
+            <button
+              onClick={runTriageDemoCases}
+              disabled={triageTestsRunning}
+              className="text-xs px-2.5 py-1 rounded-lg border border-border hover:border-primary/50 transition-colors"
+            >
+              {triageTestsRunning ? "Running TRIAGE tests..." : "Run TRIAGE Test Cases"}
+            </button>
           </div>
         </div>
+
+        {triageCaseResults.length > 0 && (
+          <div className="glass-strong rounded-2xl p-4 mb-6">
+            <h3 className="font-display font-semibold mb-2">TRIAGE AGENT Test Harness</h3>
+            <div className="space-y-1.5 text-xs">
+              {triageCaseResults.map((r) => (
+                <div key={r.name} className="flex items-center justify-between glass rounded-lg px-3 py-2">
+                  <span>{r.name}</span>
+                  <span className={`${r.passed ? "text-success" : "text-warning"} font-semibold`}>
+                    {r.passed ? "PASS" : "FAIL"} · {r.priority.toUpperCase()} · score {r.score}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Stat Cards */}
         {dataLoading ? (
@@ -476,6 +584,7 @@ function AdminPage() {
                     <span className="font-bold text-primary">Score {item.triageScore}</span>
                   </div>
                   <div className="mt-1 text-muted-foreground line-clamp-1">{item.description}</div>
+                  {(item.triage_summary || item.ai_summary) && <div className="mt-1 text-[11px] text-accent line-clamp-1">{item.triage_summary || item.ai_summary}</div>}
                 </div>
               ))}
             </div>
