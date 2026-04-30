@@ -1,0 +1,8 @@
+┌─────────────┬────────────────────┬─────────────┐
+│ schema_name │     table_name     │ rls_enabled │
+├─────────────┼────────────────────┼─────────────┤
+│ public      │ emergency_requests │ true        │
+│ public      │ missions           │ true        │
+│ public      │ profiles           │ true        │
+│ public      │ user_roles         │ true        │
+└─────────────┴────────────────────┴─────────────┘

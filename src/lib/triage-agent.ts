@@ -212,7 +212,7 @@ export async function runTriageAgent(input: TriageInput): Promise<TriageOutput> 
   const peopleScore = clamp(Math.log2(Math.max(1, input.peopleAffected) + 1) * 9, 0, 20);
   const duplicatePenalty = clamp((input.duplicateCount || 0) * 2, 0, 10);
 
-  const score = clamp(
+  const score = Math.round(clamp(
     10 +
       text.score +
       image.score +
@@ -220,7 +220,7 @@ export async function runTriageAgent(input: TriageInput): Promise<TriageOutput> 
       Math.round(weather * 0.14) +
       geo +
       duplicatePenalty
-  );
+  ));
 
   const reasoning = [
     image.signals[0] ? `Image: ${image.signals[0]}` : "",

@@ -69,11 +69,26 @@ function VolunteerPage() {
   const [hasVehicle, setHasVehicle] = useState(profile?.has_vehicle || false);
   const [loading, setLoading] = useState(true);
   const [travelMode, setTravelMode] = useState<TravelMode>("car");
+  const [volunteerDisplayName, setVolunteerDisplayName] = useState("");
 
   useEffect(() => {
     setSkills(profile?.skills?.join(", ") || "");
     setHasVehicle(profile?.has_vehicle || false);
+    if (profile?.full_name) setVolunteerDisplayName(profile.full_name);
   }, [profile]);
+
+  useEffect(() => {
+    if (!user || profile?.full_name) return;
+    supabase
+      .from("profiles")
+      .select("full_name")
+      .eq("id", user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        const dbName = (data?.full_name || "").trim();
+        if (dbName) setVolunteerDisplayName(dbName);
+      });
+  }, [user, profile?.full_name]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -148,10 +163,12 @@ function VolunteerPage() {
     } catch {
       // Silent fallback to distance-based estimation.
     }
+    const missionVolunteerName =
+      (profile?.full_name || volunteerDisplayName || user.email?.split("@")[0] || "Volunteer").trim();
     const { error } = await supabase.from("missions").insert({
       request_id: req.id,
       volunteer_id: user.id,
-      volunteer_name: profile?.full_name || "Volunteer",
+      volunteer_name: missionVolunteerName,
       status: "accepted",
       eta_minutes: routeDuration,
       volunteer_start_lat: myLoc[0],
